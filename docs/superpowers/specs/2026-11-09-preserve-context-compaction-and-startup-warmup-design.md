@@ -38,6 +38,38 @@
 | 最大 prompt tokens | 62,834 |
 | 单条 metadata | 62–95KB |
 
+上表是压缩后原 5 轮会话、worker 已热时的测量；同一 session 继续增长后，`start_turn` 会随历史轮数回升，见 1.1。
+
+### 1.1 真实服务检测（2026-11-09 20:36–20:44）
+
+服务 8000 / worker 18001 启动成功，启动预热可见：
+
+```
+warmup host_llm_client 4.08s
+warmup host_pdf_documents 0.02s
+warmup host_inference_runtime 0.00s
+启动阶段：宿主客户端预热完成（累计 15.6s）
+warmup worker_llm_client 0.00s
+warmup worker_tool_registry 0.75s
+warmup worker_prompt_manager 0.00s
+warmup worker_compact_history 0.03s
+```
+
+真实 SSE 提问结果（同一问题，`什么是自变量？`）：
+
+| 场景 | 点击→完成 | worker `start_turn` | 首个阶段 |
+|---|---:|---:|---:|
+| 新 session（直接 SSE，未先走 catalog/bind） | 54.6s | 11.8s | 30.1s |
+| 长 session 第 1 次 | 62.4s | 10.2s | 37.0s |
+| 长 session 第 2 次（间隔 10s） | 78.1s | 7.0s | 49.7s |
+
+结论：
+
+- 压缩解决了 497KB 单条工具结果，但没有限制**历史轮数和 `model_turn` 条数**；长会话增长后 `start_turn` 仍会到 7–10s，`ContextBuilder` 首次阶段仍可能 30–50s。
+- 新 session 直接走 SSE 时，`start_turn` 还包含首次 native session 创建/course 绑定成本；浏览器先走 catalog/bind 时这部分会提前发生。
+- 本次真实服务里 host `heart.native_timing` 没有出现在日志中（logger 级别/处理器未生效）；worker `worker_native_start` 可见。实现时必须把 host 计时 logger 提到 INFO 或改用已有 INFO logger，否则“保留计时”只是代码在、日志看不到。
+- 本计划只承诺“工具结果不再膨胀”和“启动预热可观测”，不承诺长会话固定耗时；历史轮数上限/摘要缓存不在本计划范围。
+
 风险：`NATIVE_132_IMPLEMENTATION_PLAN.md` 的阶段 1-C/3-C/2 会继续改 `main._run_turn`、`native_executor.py`、`native_bridge.py`、`teaching_prompt_adapter.py` 等文件；如果没有文档约束和回归测试，这些修复可能在后续迁移中被静默删除。
 
 ## 2. 目标与非目标
@@ -54,6 +86,7 @@
 - 不拆分 admit/execute（上游 `request_preparer.py` 已用 `asyncio.create_task(_run_turn)`）。
 - 不调整 `explore_context.max_tokens`，不实现“简单题跳过 explorer”。
 - 不新增 `UnifiedContext` 缓存，不做打开会话预热。
+- 不解决历史轮数增长导致的 `start_turn` 变慢；不做 history cap / summary cache（后续单独评估）。
 - 不修改 `project/vendor/DeepTutor`，不改数据库 schema。
 - 不做混合文件提交。
 
@@ -105,6 +138,7 @@
 - 宿主：`native_executor.py` 使用 `logging.getLogger("heart.native_timing")`，记录 `account_expire`、`resolve_resources`、`memory_epoch`、`claim`、`save_executing`、`prepare_selection`、`native_start`、`checkpoint_after_start`、`first_event`。
 - worker：`native_bridge.py` 的 `start` 使用 `print(..., flush=True)` 记录 `worker_native_start` 的 `authorize`、`account`、`bind`、`start_turn`、`before_status`、`status`。
 - 两边都保留，作为后续性能排查的固定诊断；不参与业务判断。
+- host 计时必须可观测：实现时对 `heart.native_timing` 设置 `setLevel(logging.INFO)`，或在 `main.py` 的 logging 配置中显式启用；本次真实服务检测中发现它默认不可见。
 
 ### 3.4 迁移文档改动
 
@@ -178,7 +212,12 @@ cd E:\项目\heart\project\integration\discrete-math-tutor
 - 三份迁移文档可 grep 到“不可回退”、`compact_model_turn`、`compact_history_home`、`warm_host`、`warm_worker`、`heart.native_timing`。
 - 不修改 `project/vendor/DeepTutor`；不新增 schema；不做混合提交。
 - 手工抽 1–2 个引用/归属类回答，确认截断后仍能引用教材原文。
-- 参考指标（不作为硬断言）：长会话 `start_turn` 约 1.2s、首个事件约 6.5s、浏览器约 30s。
+- 真实服务冒烟（手工，不放进默认 pytest）：
+  - 启动 8000 / 18001，确认 `warmup host_*`、`warmup worker_*`、`worker_compact_history` 日志存在；
+  - 新 session 和长 session 各发一个真实问题，确认 `answer_status=answered`；
+  - 确认 host `heart.native_timing` 和 worker `worker_native_start` 都能看到；
+  - 只记录 `start_turn` / 首个阶段耗时，不设固定上限（历史轮数会增长）。
+- 历史参考值（不作为硬断言）：原始 5 轮会话压缩后 `start_turn` 约 1.2s；长会话增长后实测 7–10s。
 
 ## 7. 风险与缓解
 
@@ -190,6 +229,7 @@ cd E:\项目\heart\project\integration\discrete-math-tutor
 | 代码仍未提交 | 文档+测试降低被删风险；后续需要时按 hunk 拆分提交 |
 | AST 守卫在重构后失效 | 同步更新测试；守卫只检查接线，不替代运行时验收 |
 | 阶段 3 更换 memory/context 来源 | 文档要求保留压缩并重跑回归；若 context 结构变化，更新 `compact_model_turn` 的字段路径 |
+| 长会话历史轮数增长 | 压缩只限单条工具结果，`start_turn` 仍随轮数增长；本计划不承诺固定上限，后续单独做 history cap / summary cache |
 
 ## 8. 参考
 
