@@ -1,17 +1,20 @@
 # LightRAG 统一教材检索与原生预探索优化实施计划
 
 日期：2026-11-10
-状态：计划已编写并自审，尚未执行任务。
+状态：经 grill-me 修订，采用分阶段验证；尚未执行实施任务。
 设计依据：../specs/2026-11-10-lightrag-native-retrieval-optimization-design.md
 授权范围：本轮编写文档；以下复选框记录未来实施，不因计划写完而勾选。
 
 ## 1. 目标与约束
 
-目标：用已构建的LightRAG教材库替换新回答链路的两路本地教材检索；复用原生预探索；控制当前回合课程工具文本，减少实际耗时并保留教材证据质量。
+目标：必须用已构建的LightRAG教材库替换新回答链路的两路本地教材检索；后续分别优化重复工作与上下文，每阶段单独验证，保留教材证据质量。速度不作为LightRAG迁移门槛。
 
 - 所有课程事实问答必须依据教材；缺证据可追问，不自动回退旧引擎。
 - 不重建/复制/删除教材索引，不修改project/vendor/DeepTutor固定副本，不新增Agent循环或意图分类模型。
 - 既有rag、RAGService、LightRagBackend、原文核验、原生预探索和ask_user均复用。
+- 原生顺序保持“材料预探索 → KB seed → 主回答”，不提前seed，不增加额外预探索。
+- 优先复用原生压缩与按需补读，不新增固定字符硬门槛；内部上下文压力不能伪装成教材证据不足。
+- 阶段一必须完成LightRAG迁移，速度只记录；后续可选优化无收益时保留LightRAG与原生行为。
 - 原始payload、request_id收据、已交付历史与引用不改写；只对新执行投影做旧KB别名映射。
 - 本轮不实现正文流转发、能力路由优化、逐事件授权查询优化，也不做全仓库重构。
 - 所有现有未提交修改视为用户工作，实施前记录diff；不重置、不混合提交。
@@ -29,24 +32,33 @@
 4. P/knowledge/lightrag/retrieval.py:LightRagBackend.search → query_ownership → resident.query → map_chunks/rank_sources；仅输出检索原文和辅助关联。
 5. V/deeptutor/agents/loop/agent_loop.py:run：pre_loop_briefings → kb_seed → 主循环。
 6. P/integrations/deeptutor/native_grounding.py:prepare_retrieval → native_delivery.publication_sources → native_executor → _publish_gate。
-7. V/deeptutor/tools/builtin/__init__.py:ReadSourceTool仅接受source_id，返回完整文本；分段必须在宿主来源适配中实现，不能假定原生已有分页。
+7. V/deeptutor/tools/builtin/__init__.py:ReadSourceTool仅接受source_id；保留其原生契约，优先按需读取，不预先新增分页/子来源ID。上下文压缩须区分历史与当前工作集。
 8. P/integrations/deeptutor/local_research.py另有provider白名单与KB授权，必须同步单库迁移。
 
 ## 3. 依赖顺序
 
-任务0基线 → 任务1受控宿主接口 → 任务2单库接入/迁移 → 任务3证据不足与发布门禁 → 任务4原生预探索复用 → 任务5本轮文本预算 → 任务6组合回归 → 任务7真实性能验收 → 任务8切换。
+| 阶段 | 执行顺序 | 阶段结论 |
+|---|---|---|
+| 一：必须迁移LightRAG | 任务0 → 任务1/2/3 → 任务6相应回归 → 任务7阶段一对照 → 任务8阶段一切换 | 来源/权限/功能/恢复通过后迁移，不以提速作条件；不等待任务4/5 |
+| 二：减少重复工作 | 阶段一验证完成 → 任务4 → 任务6相应回归 → 任务7阶段二对照 | 保留原生顺序；只评估重复查询/补读修改 |
+| 三：上下文优化 | 阶段二评估记录完成 → 任务5 → 任务6相应回归 → 任务7阶段三对照 | 依据实测复用原生能力，不增字符硬门槛 |
+
+阶段二/三若无可复核收益，记录原因并保留上一阶段已验证实现；不撤销LightRAG迁移。阶段一可独立切换，不能把后两阶段当成前置条件。
 每个任务必须先有对应失败断言，修改后执行相关测试；出现新失败先定位，不叠加无关修复。
 
 ### 任务0：冻结基线与来源契约
 
-文件：读取现有代码、索引manifest和测试记录；新增 P/tests/data/native_lightrag_latency_cases.json。
-验证脚本在任务7统一新增，避免先写一套临时测量实现。
+文件：读取现有代码、索引manifest和测试记录；新增P/tests/data/native_lightrag_latency_cases.json及P/scripts/check_native_lightrag_latency.py。
+从阶段一开始复用同一测量脚本；脚本采用check_preservation_smoke.py的SSE读取思路及既有native_timing/LightRAG trace，不复制启动器。
+新增P/tests/test_native_lightrag_latency.py，使用受控事件验证测量脚本。
 
 - [ ] 记录git HEAD、dirty文件清单、模型/SDK/embedding身份、教材release及candidate签名；输出不含密钥。
 - [ ] 只读核对LIGHTRAG_CANDIDATE_PATH现有input_manifest/progress/policy/index，确认教材11章及原文映射完整；不能用原生provider目录探测失败推导“需要重建”。
 - [ ] 固定题集：定义、同概念追问、跨章比较、显式选区、指定原图、一道测验、一个子主题研究、无证据问题、同回合重复读取、长会话历史。图表题以实际有效asset_id固定。
 - [ ] 对照实际题面和证据对象，记录每题必需来源/章节和允许追问的情形；不能仅以回答中有关键词判定通过。
-- [ ] 确认最新基线及测试隔离，实际旧引擎查询仅存在于候选A测量，不能在新链路中作失败兜底。
+- [ ] 确认最新基线及测试隔离，实际旧引擎查询仅存在于旧基线测量，不能在新链路中作失败兜底。
+- [ ] 测量脚本先有受控事件自测：首事件/首正文/完整答案分别计时，失败与追问不计为answered，并行区间不重复相加。
+- [ ] 保存可复用的旧基线记录；LightRAG阶段结束就重测，不推迟到三项全改完之后。
 
 完成条件：基线、题集、来源断言和对照条件可复用；不能跳过正确性基线直接宣称性能改善。
 
@@ -101,81 +113,84 @@
 
 完成条件：模型自主探索与追问仍由原生完成，宿主负责不可绕过的最终证据边界。
 
-### 任务4：共享本轮检索与原生预探索
+### 任务4：保留原生顺序，减少同回合重复查询与补读（阶段二）
 
-修改：P/integrations/deeptutor/tool_policy.py、course_rag_provider.py；按已有适配模式新增native_source_context.py集中保存本轮来源状态，避免把无关逻辑塞入全局工具策略。
+修改：P/integrations/deeptutor/tool_policy.py、course_rag_provider.py；只有现有context.metadata无法清楚承载状态时才新增native_source_context.py，不预先新建抽象。
 测试：新增test_native_source_context.py，扩充test_native_tool_policy.py。
-读取：V/deeptutor/capabilities/explore_context/{capability.py,explorer.py}与agents/loop/pipeline.py。
+读取：V/deeptutor/capabilities/explore_context/{capability.py,explorer.py}与agents/loop/{pipeline.py,agent_loop.py}。
 
-- [ ] 写失败测试：仅有课程KB时seed仅执行一次，不能因新rag来源再强制启动一次explore_context。
-- [ ] 在已有显式材料的pre_loop适配边界先准备单库seed，把合法原文与来源目录交给原生pre_loop一次；原生后续seed从同一上下文复用结果。
-- [ ] 记录原生材料是否存在于准备seed之前，保持原生活跃能力/独占能力/工具白名单；不要对mastery等声明skip_kb_seed的能力强行预检索。
-- [ ] cache限定当前回合，key包括课程KB、版本、query、mode、limit、章/节；相同并发调用合并，不跨请求/用户/分支缓存，不缓存取消/错误为成功。
-- [ ] 来源按文档+版本+范围去重，保留原始别名和引用ID；相似文字但不同版本/范围不合并。
-- [ ] 同源已读且仍在模型工作上下文时返回短指针，原文不在上下文时重新返回；有效工具调用都保留对应tool_result，不删除tool_call_id。
-- [ ] 验证复杂附加材料仍运行原生ContextExplorer，未复制它的5轮循环；无材料/选区/历史混合场景均有覆盖。
-- [ ] 执行test_native_source_context.py、test_native_tool_policy.py、test_native_question_history.py和test_native_reading_scope.py。
+- [ ] 阶段一功能/来源验证和独立计时已完成，保存阶段一结果作为本阶段基线。
+- [ ] 写失败测试：事件顺序仍为pre_loop_briefings → kb_seed → 主循环；pre_loop前不能提前查询LightRAG，seed后也不能额外补一轮预探索。
+- [ ] 保留原生材料激活条件、独占能力及skip_kb_seed约定；纯KB问答不能因后续seed生成source_index而增加预探索。
+- [ ] cache限定同一回合，key含课程KB、版本、query、mode、limit、章/节；同参数并发可合并，不跨用户/分支/任务缓存，不把取消/异常缓存为成功。
+- [ ] 按原文身份+版本+范围去重；相似文本但版本/范围不同不合并，引用ID及原始别名可追溯。
+- [ ] 原生上下文已含文本时减少重复投影；已摘要/移除后仍允许再次read_source，不发无法恢复的“已读”指针，不新造读取协议。
+- [ ] 所有tool_call仍有匹配tool_result，保留provider状态及复杂材料补读能力；不压缩问题本身或删除相关证据来刷指标。
+- [ ] 执行test_native_source_context.py、test_native_tool_policy.py、test_native_question_history.py、test_native_reading_scope.py，再执行任务6对应回归及任务7阶段二对照。
 
-完成条件：原生预探索得到本轮合法材料，同题seed不重复，复杂问题补读能力保留。
+完成条件：顺序不变、同回合重复工作减少且功能/证据不退化。若无可复核收益，保留阶段一LightRAG与原生行为，记录本阶段结论后再评估阶段三。
 
-### 任务5：控制当前回合课程工具文本
+### 任务5：复用原生上下文能力，减少冗余文本（阶段三）
 
-修改：P/integrations/deeptutor/native_source_context.py、tool_policy.py、course_rag_provider.py；复用native_history.py的8000默认值，不扩展其批量写库行为。
-测试：新增 P/tests/test_native_current_turn_budget.py。
+修改：按实测需要调整P/integrations/deeptutor/{course_rag_provider.py,tool_policy.py,native_grounding.py}中的课程投影；native_source_context.py仅在任务4确已新增时使用。
+测试：新增P/tests/test_native_context_reuse.py；不预先建立固定字符预算模块。
+读取：V/deeptutor/services/session/context_builder.py及agents/loop/{pipeline.py,context_budget.py,agent_loop.py}；不修改固定上游副本。
 
-- [ ] 先写失败测试：超长kb_files不含页坐标/全文；read_source来源正文超过8000时可通过稳定子来源ID完整分段读取。
-- [ ] 分段按原文结构/范围，目录保留来源版本和后续ID；每段不超过8000字符，不能从截断字符串构造“原文证据”。
-- [ ] 聊天当前回合课程工具正文累计上限48000字符，包含预探索；新文本超过预算时返回有界状态并允许ask_user，不输出半截正式引文。
-- [ ] 研究/测验沿用原生阶段预算，仍使用有界课程工具结果；不以聊天总预算砍掉研究报告、题卡、Word或exec结果。
-- [ ] 把服务端完整原文与模型工具投影分开；避免在content和模型可见metadata中重复附全文。已发布来源映射仍指向完整合法原文。
-- [ ] 覆盖native工具循环和fallback两条路径，不能只测试原生单次fallback旧常量。
-- [ ] 断言tool_calls/tool_call_id一一对应、Responses原生状态及reasoning/thinking blocks保持原样；不全局json字符串截断。
-- [ ] 执行test_native_current_turn_budget.py、test_native_history_compaction.py和相关原生provider-state测试。
+- [ ] 保存前两阶段的tokens、最大工具结果、原生压缩/摘要事件和长会话失败样本，明确本阶段要消除的具体冗余。
+- [ ] 先验证原生上下文规划/压缩分别作用于历史还是当前工作集，不把历史摘要宣称为已支持的本轮压缩。
+- [ ] 写失败测试：kb_files不向模型附页坐标/全文/embedding；同一原文不在content及模型可见metadata里重复堆叠。
+- [ ] 优先复用原生摘要/压缩与按需read_source，完整来源及版本映射保留；资料充足时验证复杂任务继续完成。
+- [ ] 不新增48000字符总门槛，不强制8000字符分段，不新增子来源ID或分页协议，也不因内部预算要求用户缩小问题。原生fallback与现有历史压缩保留原语义。
+- [ ] 原生不支持压缩的当前工作集，先减少重复投影和按需提供材料，不擅自复制摘要Agent/循环或硬裁切。真实模型容量受限时如实报告系统限制，不能伪装为教材缺证据。
+- [ ] 断言tool_calls/tool_call_id一一对应，Responses状态、reasoning/thinking blocks及原文否定/条件完整。
+- [ ] 研究、测验、Word、exec继续原生能力处理，不能为了减少聊天tokens砍掉正式交付。
+- [ ] 执行test_native_context_reuse.py、test_native_history_compaction.py及受影响provider-state测试，再执行任务6对应回归和任务7阶段三对照。
 
-完成条件：当前回合不再无界累积课程工具全文，必要原文可继续定位，历史压缩与模型协议未回退。
+完成条件：针对实测冗余有明确结果，原生压缩与按需补读得到复用；没有用新增字符硬门槛打断任务或减少必要证据。能力缺口如实记录，LightRAG迁移结果保留。
 
-### 任务6：组合功能与恢复回归
+### 任务6：每阶段功能与恢复回归（按已实施范围重复执行）
 
 修改/更新：P/scripts/check_native_course_rag_browser.cjs；P/scripts/check_native_research_browser.cjs中的课程KB夹具；适当补充tests/test_native_delivery.py。
 文档：更新project/docs/research/2026-11-08-deeptutor-complete-runtime中的迁移进度和已实现边界，按hunk隔离既有修改。
 
-- [ ] 运行任务1～5测试及现有native_executor/native_grounding/native_figure_tools/native_delivery/native_question_history。
-- [ ] 验证“检索→预探索→补读→正式引用→PDF原文打开→刷新恢复”闭环。
+- [ ] 阶段一仅运行任务1～3及现有native回归；阶段二再增加任务4；阶段三再增加任务5。不依赖尚未实施的后续功能或测试。
+- [ ] 验证原生“材料预探索（有材料时）→KB seed→主回答/按需补读→正式引用→PDF原文打开→刷新恢复”闭环；任何阶段都不调整原生顺序。
 - [ ] 验证旧两库选择的会话发出新请求只调用LightRAG；原request_id重放不会执行新检索。
-- [ ] 验证研究outline/continue的KB范围一致，测验/学习能力未被聊天hook破坏；Word纯格式交付不被课程文本预算截断。
+- [ ] 验证研究outline/continue的KB范围一致，测验/学习能力未被聊天hook破坏；上下文优化不裁掉Word纯格式交付。
 - [ ] 覆盖跨账号拒绝、材料更新、删除记忆、取消/重试；并发两回合不串source_index、编号、缓存或模型配置。
 - [ ] 测试实际使用独立worker/home/database；pytest路径使用唯一临时basetemp，避免与既有运行并发写同目录。
 
-建议命令组，从P运行，basetemp每次使用未被占用的独立目录：
-.venv-deeptutor/Scripts/python.exe -B -m pytest tests/test_native_course_search.py tests/test_native_course_kb_migration.py tests/test_native_course_rag_provider.py tests/test_native_course_evidence_policy.py tests/test_native_source_context.py tests/test_native_current_turn_budget.py --basetemp=.runtime/pytest-native-lightrag-20261110
+建议命令组，从P运行，basetemp每次使用未被占用的独立目录。阶段一：
+.venv-deeptutor/Scripts/python.exe -B -m pytest tests/test_native_lightrag_latency.py tests/test_native_course_search.py tests/test_native_course_kb_migration.py tests/test_native_course_rag_provider.py tests/test_native_course_evidence_policy.py --basetemp=.runtime/pytest-native-lightrag-20261110
+阶段二另跑test_native_source_context.py；阶段三另跑test_native_context_reuse.py。以下为每阶段受影响的原生回归：
 .venv-deeptutor/Scripts/python.exe -B -m pytest tests/test_native_executor.py tests/test_native_grounding.py tests/test_native_figure_tools.py tests/test_native_delivery.py tests/test_native_tool_policy.py tests/test_native_question_history.py tests/test_native_reading_scope.py tests/test_native_history_compaction.py --basetemp=.runtime/pytest-native-lightrag-regression-20261110
 
 完成条件：核心功能通过；未运行/跳过的测试及原因单列，不能用受控模型测试代替真实模型性能验收。
 
-### 任务7：真实题集与分段性能对照
+### 任务7：每阶段真实题集与分段对照（重复执行）
 
-新增：P/scripts/check_native_lightrag_latency.py。
-复用：scripts/check_preservation_smoke.py的SSE读取思路、现有LightRAG usage/trace、native_timing，不复制整套启动器。
-输出：P/.runtime/native-lightrag-latency/<run-id>/report.json及审阅用摘要；文件不含密钥。
+脚本：复用任务0已新增的P/scripts/check_native_lightrag_latency.py，不到本任务才首次开发测量工具。
+输出：P/.runtime/native-lightrag-latency/<run-id>/<stage>/report.json及审阅摘要，stage区分baseline、lightrag-only、dedup、context；不含密钥。
 
-- [ ] 脚本先有受控事件自测：首事件、首正文、最终答案分别计时；并行区间不重复相加；失败/追问不能计为answered。
-- [ ] 用任务0相同题集及版本做候选A/B；冷启动和预热后分开。每类预热后至少3次，研究/测验也明确样本数和模型成本。
-- [ ] 输出query_count、实际backend、source_count、重读次数、探索轮数、输入/输出tokens、最大工具文本、所有权等待、召回、重排、映射、模型及发布耗时。
-- [ ] LightRAG内部keyword/query模型开销单列；不能只拿native usage_summary当作全链路所有模型耗时。
-- [ ] 断言新链路不执行两旧引擎，默认同参数seed一次；澄清、权限拒绝、取消的结果分别统计。
-- [ ] 与人工已核验的证据需求逐题比对；简单概念不能靠减少证据覆盖伪造提速，复杂问题不得因限制误判充分。
-- [ ] 报告中位数、最小/最大值，不从3次样本估P95；记录本机负载、模型差异和缓存冷热。
-- [ ] 预热后中位数未改善、超时增多或质量下降则保留候选并报告剩余最长阶段，不切换正式服务。
+- [ ] 阶段一：任务1～3与任务6相应回归完成后立即与旧基线对照，此时尚未执行任务4/5。
+- [ ] 阶段二：仅加入任务4后与lightrag-only对照；阶段三：仅加入任务5后与实际保留的上一阶段版本对照。
+- [ ] 相同题集/版本，冷启动与预热后分开；每类预热后至少3次。记录模型成本与样本数，不用少量样本宣称P95。
+- [ ] 输出query_count、实际backend、source_count、重读次数、探索轮数、输入/输出tokens、最大工具文本、所有权等待、召回、重排、映射、模型和发布耗时。
+- [ ] LightRAG内部keyword/query模型开销单列，不能只拿native usage_summary当全链路总耗时；并行区间不重复相加。
+- [ ] 断言新链路不执行两旧引擎；阶段二才断言同参数重复检索合并，不能以阶段二功能要求阻挡阶段一独立迁移。
+- [ ] 逐题对照已核验来源需求；追问/拒绝/失败单列，不能计为成功答案；确认复杂材料完成能力与引用质量不退化。
+- [ ] 阶段一迁移不以耗时是否降低为条件；若慢则报告瓶颈，继续使用LightRAG修复。不得以“至少快30%”或“没提速”为理由否决迁移。
+- [ ] 阶段二/三的优化各自说明收益、波动与风险；无收益或有功能回归的可选优化不合入，保留已完成的LightRAG迁移，不回到两旧引擎。
 
-完成条件：有原始记录可复核，清楚区分“重复查询已消除”和“端到端实际更快”；不预设没有实测依据的秒数承诺。
+完成条件：每阶段都有独立功能结果和耗时记录，能区分迁移与后续优化的影响；阶段一必须迁移，速度仅是后续优化依据。
 
-### 任务8：正式切换与定向回滚
+### 任务8：阶段一独立切换，后续优化分别交付与定向回滚
 
-- [ ] 整理代码diff、测试结果、性能报告、旧KB迁移映射和回滚清单，形成可审阅结果。
+- [ ] 阶段一功能/来源/权限/恢复通过即整理独立迁移diff、测试结果、计时记录及回滚清单；即使没有提速也继续推进LightRAG迁移，不等任务4/5。
 - [ ] 在正式数据变更前备份将修改的课程资源/会话偏好；使用幂等迁移，禁止批量清空用户会话。
 - [ ] 将正式8000/18001的切换作为单独操作处理；本轮计划编写不执行重启。
 - [ ] 切换后核验单库目录、真实LightRAG后端、原文入口、追问及刷新恢复。
-- [ ] 若回归，恢复本次代码和受影响绑定；不整库覆盖、不删除LightRAG候选、历史对话或新增数据。
+- [ ] 若功能/数据回归，定向恢复受影响代码和绑定；阶段二/三的优化回滚以阶段一LightRAG为底，不回到旧两路。阶段一故障需修复，不能仅以速度不升回滚。禁止整库覆盖或删除索引/历史/新增数据。
 - [ ] 更新进度文档，仅在任务完成后勾选，不把“已写计划”标为“已实现”。
 
 ## 4. 风险与处理
@@ -185,17 +200,17 @@
 | 原生LightRAG目录与现有candidate不兼容 | 用课程薄适配调用已有宿主LightRagBackend，不重建 |
 | 同一索引被host/worker重复加载 | 宿主现有runtime唯一执行查询，worker只做受控调用 |
 | 同进程查询锁不能代表跨进程互斥 | 不增加第二查询owner；并发/取消测试覆盖现有write/query所有权 |
-| LightRAG内部模型、重排或排队仍慢 | 各自记录trace和usage；用实测决定切换 |
+| LightRAG内部模型、重排或排队仍慢 | 各自记录trace和usage供后续优化；不作为否决迁移的门槛 |
 | 别名归一破坏幂等或权限 | 原始payload/hash保留，执行投影映射且重新授权 |
-| 预检索提前导致所有问题多一次探索 | 区分原有附加材料与seed新增来源，纯KB不强制预探索 |
-| 本轮预算把否定/条件截断 | 原文范围分段，不用任意前缀冒充完整证据；不够就追问 |
+| 优化改变原生预探索顺序 | 事件顺序测试；不提前seed、不追加预探索 |
+| 上下文压力被误判为教材缺证据 | 优先原生压缩/按需读取；不新增字符硬门槛，不借内部预算要求用户缩小问题 |
 | graph_context被当教材事实 | 仅原文来源进入prepare_retrieval/publication_sources |
 | 控制模型通过、真实服务仍慢 | 功能测试与真实计时分开报告，保留原始样本 |
 
 ## 5. 计划自审
 
-- 用户确认的三个范围均有可执行任务；没有混入正文流/路由/授权性能改造。
+- 用户确认的三个范围分阶段实施和验证；必须迁移LightRAG，不以速度改善作门槛；没有混入正文流/路由/授权性能改造。
 - 每任务注明真实路径、依赖、失败断言、修改点和完成条件。
 - 新增的宿主接口只是复用常驻LightRAG的进程边界，不是新检索引擎。
-- 没有自动回退、索引重建、历史收据改写或直接截断provider状态。
+- 保留原生预探索顺序，撤销提前seed与新增固定字符预算；优先复用原生压缩/按需补读。没有自动回退、索引重建、历史收据改写或直接截断provider状态。
 - 没有声称已经实施或测试；所有任务保持未完成。
