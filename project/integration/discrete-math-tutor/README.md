@@ -35,6 +35,27 @@ Windows 双击 `3-start-api.bat`，或在本目录运行：
 
 默认只做结构与追问契约自检，不调用模型；`--live` 使用本机模型和隔离数据库运行本地链路，报告写入 `.runtime/conversation-quality/`。`--include-golden` 可加入 9 类心理学黄金集中的文本案例。
 
+## 教材知识图谱（只读候选）
+
+页面：`http://127.0.0.1:8000/knowledge-graph`（主站左侧导航第三项下方的「知识图谱」图标）。路由由
+`graph_viewer.attach()` 挂进 `main.py`，静态资源走 `/assets`、`/vendor/cytoscape`，接口为 `/api/graph/*`，
+全部只读，不写入索引或学习记录。
+
+候选数据在 `knowledge/graph/psychology-candidate/`，由 `scripts/build_graph_candidate.py` 从正式教材生成：
+
+```powershell
+.venv/Scripts/python.exe scripts/build_graph_candidate.py
+```
+
+生成内容：11 章 + 48 个小节节点、约 220 个概念实体、约 2,200 条关系（章节归属 / 概念出现 / 段落共现），
+以及 4,200 余条原文片段。实体与关系由本地规则抽取（术语表 + 定义句式 + 段落共现），**不是大模型或 LightRAG 抽取结果**，
+所以页面标注「候选 · 只读」，关系摘要只作浏览线索，不作为已核验事实。
+
+`index_files.json` 记录每个索引文件的 sha256，`input/pdf_manifest.json` 的 `version` 必须等于对应 PDF 的 sha256；
+任何一项不一致，`GraphView` 会拒绝读取（页面提示来源缺失/版本失效）。候选目录缺失时主站照常启动，只是没有图谱页。
+
+独立运行（不启动助教）：`python graph_viewer.py --candidate knowledge/graph/psychology-candidate --port 8001`。
+
 ## DeepTutor 整体接入
 
 实施计划与进度：[实施计划](../../docs/research/2026-10-18-deeptutor-full-reuse/IMPLEMENTATION_PLAN.md)、[执行记录](../../docs/research/2026-10-18-deeptutor-full-reuse/EXECUTION_LOG.md)。完整上游源码位于 `../../vendor/DeepTutor`，包含前后端源码、提示词、测试与部署文件。
