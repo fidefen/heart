@@ -4,21 +4,25 @@
 
 ## 启动与使用
 
-Windows 双击 `3-start-api.bat`，或在本目录运行：
+Windows 双击 `3-start-api.bat`，或在已建好虚拟环境的目录运行：
 
 ```powershell
-.venv-gpu/Scripts/python.exe -X utf8 -m scripts.start_server --port 8000
+.venv/Scripts/python.exe -X utf8 -m scripts.start_server --port 8000
 ```
 
-打开 http://127.0.0.1:8000/ 。配置保存在本机 `.env`，不要分享密钥。真实模型要求 `LLM_MOCK=0`；当前重排模型运行在GPU，embedding运行在CPU。
+打开 http://127.0.0.1:8000/ 。配置保存在本机 `.env`，不要分享密钥。真实模型要求 `LLM_MOCK=0`，并正确填写 `OPENAI_BASE_URL`、`OPENAI_MODEL`（DeepSeek 官方模型名为 `deepseek-chat`，不是 `deepseek-flash`）。
 
-教材共11章、37节，阅读版PDF共376页。页码标注为生成阅读版页码，不能作为印刷版页码引用。支持教材圈选提问、回答引用定位与高亮；教学需要时自动调用实验流程、变量关系和设计矩阵图解，学生只需点击上一步或下一步。
+`3-start-api.bat` 会自动挑选解释器：存在 `.venv-gpu\gpu-verified.json` 时使用 `.venv-gpu` 并把重排与 embedding 切到 CUDA；否则退回 `.venv`，两者都用 CPU。本机当前走 CPU 路径（`RAG_RERANK_DEVICE=cpu`、`RAG_EMBED_DEVICE=cpu`），没有 GPU 也能完整运行，只是检索重排稍慢。
+
+教材共11章、37节（另有11篇章导言，共48个小节节点），阅读版PDF共323页。页码标注为生成阅读版页码，不能作为印刷版页码引用。支持教材圈选提问、回答引用定位与高亮；教学需要时自动调用实验流程、变量关系和设计矩阵图解，学生只需点击上一步或下一步。
+
+四个入口：主平台 `http://127.0.0.1:8000/`、教材样章 `http://127.0.0.1:8000/textbook-preview/psychology`（单栏阅读版式，由 `course_preview_api.py` 提供）、只读知识图谱 `http://127.0.0.1:8000/knowledge-graph`、平台内左侧「教材」的 PDF 阅读器。本分支的改动范围与数据重建步骤见 `docs/psychology-platform-branch.md`。
 
 当前提供的教材未发现独立习题栏。实验目的与实验程序保留在阅读器中；练习页不展示其他教材题目，也不虚构官方题目或答案。
 
 ## 数据与验收
 
-正式教材和索引：`knowledge/courses/experimental-psychology-3/`。
+正式教材和索引：`knowledge/courses/experimental-psychology-3/`。该目录含整本教材正文与 PDF，按仓库既有 `.gitignore` 约定不纳入提交，克隆后只剩 `kc_registry.json`；需在本机用原始教材文本重建，命令见 `docs/psychology-platform-branch.md`（`scripts/rebuild_psych_book.py`、`scripts/make_psych_sample.py`、`scripts/build_psychology_sample_index.py --all`）。
 
 心理学学习库自动采用独立SQLite文件 `ai_tutor.experimental-psychology-3.db`。原学习数据库不覆盖、不清空，启动时不会因代码变化删除心理学测试账户；测试账户原有有效期规则仍生效。
 
@@ -29,15 +33,15 @@ Windows 双击 `3-start-api.bat`，或在本目录运行：
 连续对话质量样本（Q1）：
 
 ```powershell
-.venv-gpu/Scripts/python.exe -B scripts/check_conversation_quality.py
-.venv-gpu/Scripts/python.exe -B scripts/check_conversation_quality.py --live --case simplify_without_switching
+.venv/Scripts/python.exe -B scripts/check_conversation_quality.py
+.venv/Scripts/python.exe -B scripts/check_conversation_quality.py --live --case simplify_without_switching
 ```
 
 默认只做结构与追问契约自检，不调用模型；`--live` 使用本机模型和隔离数据库运行本地链路，报告写入 `.runtime/conversation-quality/`。`--include-golden` 可加入 9 类心理学黄金集中的文本案例。
 
 ## 教材知识图谱（只读候选）
 
-页面：`http://127.0.0.1:8000/knowledge-graph`（主站左侧导航第三项下方的「知识图谱」图标）。路由由
+页面：`http://127.0.0.1:8000/knowledge-graph`（主站左侧导航第四项「知识图谱」，位于「学习记录」下方，新标签页打开）。路由由
 `graph_viewer.attach()` 挂进 `main.py`，静态资源走 `/assets`、`/vendor/cytoscape`，接口为 `/api/graph/*`，
 全部只读，不写入索引或学习记录。
 
@@ -57,6 +61,8 @@ Windows 双击 `3-start-api.bat`，或在本目录运行：
 独立运行（不启动助教）：`python graph_viewer.py --candidate knowledge/graph/psychology-candidate --port 8001`。
 
 ## DeepTutor 整体接入
+
+以下 DeepTutor 接入属于上游可选能力，相关开关（`DEEPTUTOR_*`、`RAG_RETRIEVAL_ENGINE`）默认均为 `0`/`legacy`，不启用也不影响主平台的对话、练习与引用链路；本分支未改动这部分代码，也未重新验证。
 
 实施计划与进度：[实施计划](../../docs/research/2026-10-18-deeptutor-full-reuse/IMPLEMENTATION_PLAN.md)、[执行记录](../../docs/research/2026-10-18-deeptutor-full-reuse/EXECUTION_LOG.md)。完整上游源码位于 `../../vendor/DeepTutor`，包含前后端源码、提示词、测试与部署文件。
 
