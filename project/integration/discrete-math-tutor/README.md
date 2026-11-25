@@ -26,7 +26,7 @@ Windows 双击 `3-start-api.bat`，或在已建好虚拟环境的目录运行：
 
 心理学学习库自动采用独立SQLite文件 `ai_tutor.experimental-psychology-3.db`。原学习数据库不覆盖、不清空，启动时不会因代码变化删除心理学测试账户；测试账户原有有效期规则仍生效。
 
-教材替换计划及验收详情见 `docs/原项目教材替换实施计划.md` 和 `docs/正式教材迁移实施记录.md`。旧教材资源和旧说明归档于 `artifacts/archive/discrete-math-20261015/`，不会经静态教材目录提供或进入当前检索；原库切换前备份位于 `artifacts/service-backups/before-psychology-cutover-20261015.sqlite`。
+教材替换计划及验收详情见 `docs/原项目教材替换实施计划.md` 和 `docs/正式教材迁移实施记录.md`。旧教材资源和旧说明归档于 `artifacts/archive/discrete-math-20261015/`，不会经静态教材目录提供或进入当前检索；原库切换前备份位于 `artifacts/service-backups/before-psychology-cutover-20261015.sqlite`。这两处 `artifacts/` 归档只在原始开发机上保留，不随仓库分发，克隆后该目录为空属正常。
 
 已验证代表性概念、随机区组设计、表格图解、文本选区及跨章引用；尚未逐页人工复核全部版面，也未覆盖全部统计公式和纯图片问答。图解核验失败时保留文字回答，不展示未通过的图解。
 
